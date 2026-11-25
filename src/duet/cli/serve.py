@@ -2,19 +2,26 @@
 
 import asyncio
 import sys
+from pathlib import Path
 
 import qrcode
 from aiohttp import web
 
 from duet.core._network import select_bind_address
+from duet.core.config import Config, load_config
+from duet.core.logging import configure_logging
 from duet.core.pairing import PairingManager, PairingOffer
 from duet.server.app import create_app
 
 
-def run_serve(*, bind: str | None = None, port: int = 8765) -> int:
+def run_serve(
+    *, bind: str | None = None, port: int = 8765, config_path: Path | None = None
+) -> int:
     try:
         host = select_bind_address(bind)
-        asyncio.run(_listen(host, port))
+        config = load_config(config_path)
+        configure_logging(config)
+        asyncio.run(_listen(host, port, config))
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError) as exc:
@@ -31,11 +38,13 @@ def _print_offer(base_url: str, offer: PairingOffer) -> None:
     sys.stdout.flush()
 
 
-async def _listen(host: str, port: int) -> None:
+async def _listen(host: str, port: int, config: Config) -> None:
     pairing = PairingManager()
     refresh = asyncio.Event()
     base_url = f"http://{host}:{port}" if port != 80 else f"http://{host}"
-    app = create_app(pairing, host=host, port=port, on_paired=refresh.set)
+    app = create_app(
+        pairing, host=host, port=port, on_paired=refresh.set, config=config
+    )
     runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await runner.setup()
     try:
