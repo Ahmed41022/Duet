@@ -5,10 +5,10 @@ import time
 
 import pytest
 from aiohttp import ClientSession, CookieJar, web
-from duet.core.outbox import Outbox
 
 import duet.desktop_runtime as runtime_module
 from duet.core.history import HistoryStore, TransferObserver
+from duet.core.outbox import Outbox
 from duet.desktop_runtime import DesktopRuntime
 
 
