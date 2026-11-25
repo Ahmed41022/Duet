@@ -15,6 +15,7 @@ from duet.core.config import Config
 from duet.core.pairing import PairingError, PairingManager, Session
 from duet.core.uploads import UploadStore
 from duet.server._events import EventHub
+from duet.server.text import register_text
 from duet.server.uploads import register_uploads
 
 _COOKIE = "duet_session"
@@ -176,6 +177,12 @@ def create_app(
         max_parallel_uploads=config.max_parallel_uploads,
     )
     register_uploads(app, uploads, lambda request: session_for(request).id)
+
+    async def session_status(request: web.Request) -> web.Response:
+        return web.json_response({"paired": True, "id": session_for(request).id})
+
+    register_text(app, app[EVENTS])
+    app.router.add_get("/api/session", session_status)
     app.router.add_post("/api/pair", pair)
     app.router.add_get("/api/events", events, allow_head=False)
     app.router.add_get("/", static)
