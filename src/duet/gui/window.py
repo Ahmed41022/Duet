@@ -293,7 +293,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.devices_table = self._make_table(["Device", "Connected", ""])
         self.transfers_table = self._make_table(["Transfer", "Progress", "State"])
-        self.outbox_table = self._make_table(["Ready to send", "Size"])
+        self.outbox_table = self._make_table(["Ready to send", "Size", "Action"])
         self.history_table = self._make_table(["Recent activity", "Result", "When"])
         self.messages_list = QListWidget()
         self.messages_list.setWordWrap(True)
@@ -409,14 +409,17 @@ class MainWindow(QMainWindow):
             self.status_label.setText("● Sharing is on")
             self.status_label.setStyleSheet("background:#e8f7ee;color:#187448")
             self.start_button.setText("Stop sharing")
-            self.start_button.setObjectName("danger")
-            self.start_button.setStyle(self.start_button.style())
         else:
             self.status_label.setText("● Stopped")
             self.status_label.setStyleSheet("background:#edf0f4;color:#69758a")
             self.start_button.setText("Start sharing")
-            self.start_button.setObjectName("primary")
-            self.start_button.setStyle(self.start_button.style())
+        button_style_name = "danger" if running else "primary"
+        if self.start_button.objectName() != button_style_name:
+            self.start_button.setObjectName(button_style_name)
+            style = self.start_button.style()
+            style.unpolish(self.start_button)
+            style.polish(self.start_button)
+            self.start_button.update()
         if self.tray:
             self.tray.setToolTip("Duet — sharing" if running else "Duet — stopped")
             self.tray.setIcon(self._tray_icon(running))
@@ -542,6 +545,19 @@ class MainWindow(QMainWindow):
                 row, 1, QTableWidgetItem(_format_bytes(item.get("size")))
             )
 
+            button = QPushButton("Withdraw")
+            button.setObjectName("danger")
+            offer_id = item.get("id")
+            button.setEnabled(offer_id is not None)
+            button.clicked.connect(
+                lambda _=False, value=offer_id: self._withdraw_offer(value)
+            )
+            self.outbox_table.setCellWidget(row, 2, button)
+
+    def _withdraw_offer(self, offer_id: str) -> None:
+        self._call("remove_offer", offer_id)
+        self.refresh()
+
     def _fill_messages(self, rows: list[dict[str, Any]]) -> None:
         self.messages_list.clear()
         for message in rows:
@@ -614,8 +630,17 @@ class MainWindow(QMainWindow):
 
     def open_received(self) -> None:
         directory = self._last_snapshot.get("received_directory")
-        if directory:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(directory))))
+        if not directory:
+            self._show_error("Choose a Received folder in Settings.")
+            return
+        folder = Path(directory)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError) as exc:
+            self._show_error(f"Could not create the Received folder. {exc}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            self._show_error("Could not open the Received folder.")
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(self._last_snapshot, self)

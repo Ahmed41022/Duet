@@ -93,6 +93,12 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
             assert response.status == 200
             assert await response.read() == b"duet"
 
+            await asyncio.wrap_future(runtime.remove_offer(identity))
+            assert runtime.snapshot()["outbox"] == []
+            response = await phone.get(f"/api/files/{identity}")
+            assert response.status == 404
+            assert source.read_bytes() == b"duet"
+
             await asyncio.wrap_future(runtime.revoke(fresh["devices"][0]["id"]))
             assert (await phone.get("/api/text")).status == 401
 
@@ -103,6 +109,7 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
         runtime.offer(source).result(5)
         assert Outbox(tmp_path / "outbox.sqlite3").list()[0].name == source.name
         runtime.start().result(5)
+        assert not received.exists()
         asyncio.run(exercise())
         state = _wait_for(
             runtime, lambda s: len(s["history"]) == 2 and len(s["messages"]) == 2

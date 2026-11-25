@@ -327,6 +327,13 @@ class DesktopRuntime:
         await asyncio.to_thread(self._outbox.offer, path)
         await self._read_storage()
 
+    def remove_offer(self, offer_id: str) -> Future:
+        return self._submit(self._remove_offer, offer_id)
+
+    async def _remove_offer(self, offer_id: str) -> None:
+        await asyncio.to_thread(self._outbox.revoke, offer_id)
+        await self._read_storage()
+
     def send_text(self, text: str) -> Future:
         return self._submit(self._send_text, text)
 
