@@ -86,7 +86,6 @@ class DeviceStatus:
     async def run(self, pairing: PairingManager, stop: asyncio.Event) -> None:
         pid = os.getpid()
         started = await asyncio.to_thread(psutil.Process(pid).create_time)
-        await asyncio.to_thread(self._prune)
         failed = False
         try:
             while not stop.is_set():
@@ -139,11 +138,3 @@ class DeviceStatus:
         finally:
             if path is not None:
                 path.unlink(missing_ok=True)
-
-    def _prune(self) -> None:
-        try:
-            for path in self._directory.glob("*.json"):
-                if _read_status(path) is None:
-                    path.unlink(missing_ok=True)
-        except OSError as exc:
-            _LOG.warning("Could not prune old local device status: %s", exc)
