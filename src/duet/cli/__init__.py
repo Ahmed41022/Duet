@@ -1,6 +1,7 @@
 """Command-line entry point for Duet."""
 
 import argparse
+from pathlib import Path
 
 from duet import __version__
 
@@ -15,9 +16,14 @@ def main() -> None:
     serve.add_argument("--bind", help="Assigned private IPv4 address")
     serve.add_argument("--port", type=int, default=8765)
 
+    serve.add_argument(
+        "--config", type=Path, help="Path to the Duet TOML configuration"
+    )
     args = parser.parse_args()
     if args.command == "serve":
         from duet.cli.serve import run_serve
 
-        raise SystemExit(run_serve(bind=args.bind, port=args.port))
+        raise SystemExit(
+            run_serve(bind=args.bind, port=args.port, config_path=args.config)
+        )
     parser.print_help()

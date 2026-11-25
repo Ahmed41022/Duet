@@ -11,8 +11,11 @@ from importlib.resources.abc import Traversable
 from aiohttp import web
 
 from duet.core._network import is_private_ipv4
+from duet.core.config import Config
 from duet.core.pairing import PairingError, PairingManager, Session
+from duet.core.uploads import UploadStore
 from duet.server._events import EventHub
+from duet.server.uploads import register_uploads
 
 _COOKIE = "duet_session"
 _CREDS_LIMIT = 4096
@@ -30,6 +33,7 @@ def create_app(
     *,
     host: str,
     port: int,
+    config: Config | None = None,
     static_root: Traversable | None = None,
     heartbeat_interval: float = 15,
     on_paired: Callable[[], None] | None = None,
@@ -165,6 +169,13 @@ def create_app(
     async def close_events(application: web.Application) -> None:
         application[EVENTS].close()
 
+    config = config or Config()
+    uploads = UploadStore(
+        config.received_directory,
+        max_file_size=config.max_file_size,
+        max_parallel_uploads=config.max_parallel_uploads,
+    )
+    register_uploads(app, uploads, lambda request: session_for(request).id)
     app.router.add_post("/api/pair", pair)
     app.router.add_get("/api/events", events, allow_head=False)
     app.router.add_get("/", static)
