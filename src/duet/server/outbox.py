@@ -10,6 +10,7 @@ from datetime import UTC
 from email.utils import formatdate, parsedate_to_datetime
 from typing import Protocol
 from urllib.parse import quote
+from uuid import uuid4
 
 from aiohttp import web
 
@@ -19,6 +20,7 @@ from duet.core._outbox_stream import (
     verify,
     zip_chunks,
 )
+from duet.core.history import TransferObserver
 from duet.core.outbox import Outbox, Source
 
 _LOG = logging.getLogger(__name__)
@@ -96,7 +98,9 @@ async def _next_chunk(iterator: Iterator[bytes]) -> bytes | None:
         raise
 
 
-async def _download(request: web.Request, outbox: Outbox) -> web.StreamResponse:
+async def _download(
+    request: web.Request, outbox: Outbox, observer: TransferObserver | None
+) -> web.StreamResponse:
     source = await asyncio.to_thread(_fetch, outbox, request.match_info["id"])
     offer = source.offer
     size = offer.size
@@ -127,8 +131,14 @@ async def _download(request: web.Request, outbox: Outbox) -> web.StreamResponse:
         status=206 if span is not None else 200, headers=headers
     )
     response.content_length = length = end - start + 1
+    transfer_id = uuid4().hex
+    total = length
+    if request.method != "HEAD" and observer is not None:
+        observer.update(transfer_id, offer.name, "download", 0, total)
     if request.method == "HEAD" or not length:
         await response.prepare(request)
+        if request.method != "HEAD" and observer is not None:
+            observer.finish(transfer_id, "completed")
         return response
     stream = _body(source, start, length)
     try:
@@ -150,8 +160,16 @@ async def _download(request: web.Request, outbox: Outbox) -> web.StreamResponse:
                 raise OSError("The offered representation ended early")
             piece = chunk[skip : skip + length]
             skip = 0
-            length -= len(piece)
             await response.write(piece)
+            length -= len(piece)
+            if observer is not None:
+                observer.update(
+                    transfer_id,
+                    offer.name,
+                    "download",
+                    total - length,
+                    total,
+                )
             if not length:
                 break
             chunk = await _next_chunk(stream)
@@ -163,6 +181,8 @@ async def _download(request: web.Request, outbox: Outbox) -> web.StreamResponse:
         response.force_close()
     finally:
         stream.close()
+        if observer is not None:
+            observer.finish(transfer_id, "completed" if length == 0 else "interrupted")
     return response
 
 
@@ -172,6 +192,7 @@ def register_outbox(
     events: EventPublisher,
     outbox: Outbox | None = None,
     poll_interval: float = 0.5,
+    observer: TransferObserver | None = None,
 ) -> None:
     """Attach outbox endpoints and the cross-process change watcher."""
     if not 0 < poll_interval < float("inf"):
@@ -183,7 +204,7 @@ def register_outbox(
         return web.json_response({"files": [offer.public() for offer in offers]})
 
     async def download(request: web.Request) -> web.StreamResponse:
-        return await _download(request, store)
+        return await _download(request, store, observer)
 
     async def watch(application: web.Application):
         version = await asyncio.to_thread(store.revision)
