@@ -141,7 +141,8 @@ class SettingsDialog(QDialog):
             value = str(
                 address.get("address") if isinstance(address, dict) else address
             )
-            self.bind.addItem(value, value)
+            name = address.get("name") if isinstance(address, dict) else None
+            self.bind.addItem(f"{name} ({value})" if name else value, value)
         current_bind = str(snapshot.get("bind") or "")
         if current_bind:
             index = self.bind.findData(current_bind)
@@ -436,7 +437,13 @@ class MainWindow(QMainWindow):
             f"Received folder: {snapshot.get('received_directory') or '—'}"
         )
         is_public = snapshot.get("network_is_public")
-        if is_public is True:
+        warning = snapshot.get("network_warning")
+        if warning and running:
+            self.public_warning.setText(
+                f"{snapshot.get('network_name') or 'Network'}: {warning}"
+            )
+            self.public_warning.show()
+        elif is_public is True:
             network = snapshot.get("network_name") or "this network"
             self.public_warning.setText(
                 f"⚠ {network} may be public or shared. Duet uses local HTTP; avoid sharing sensitive files here."
@@ -449,6 +456,8 @@ class MainWindow(QMainWindow):
         self._fill_outbox(snapshot.get("outbox") or [])
         self._fill_messages(snapshot.get("messages") or [])
         self._fill_history(snapshot.get("history") or [])
+        if not running and snapshot.get("stop_reason"):
+            self.status_label.setText(snapshot["stop_reason"])
         error = snapshot.get("error")
         if error:
             self._show_error(str(error))
@@ -646,8 +655,8 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self._last_snapshot, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             bind = dialog.bind.currentText().strip()
-            if bind == "Automatic (recommended)":
-                bind = ""
+            if bind == dialog.bind.itemText(dialog.bind.currentIndex()):
+                bind = dialog.bind.currentData() or ""
             bind = bind or None
             self._call(
                 "configure",

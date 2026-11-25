@@ -15,13 +15,21 @@ from tempfile import NamedTemporaryFile
 
 from aiohttp import web
 
-from duet.core._network import is_private_ipv4, select_bind_address
+from duet.core._idle import IdleTracker
+from duet.core._network import (
+    NetworkInterface,
+    is_address_assigned,
+    is_private_ipv4,
+    list_network_interfaces,
+    select_network,
+)
 from duet.core.config import Config
 from duet.core.device_status import DeviceStatus
 from duet.core.history import HistoryStore, TransferObserver
 from duet.core.outbox import Outbox, default_database
 from duet.core.pairing import PairingManager, PairingOffer, Session
 from duet.server.app import create_app
+from duet.server.lifecycle import StopReason, install_lifecycle
 from duet.server.text import TEXT
 
 
@@ -52,6 +60,10 @@ class DesktopRuntime:
         self._port = port
         self._offer_ttl = offer_ttl
         self._bind: str | None = None
+        self._networks: tuple[NetworkInterface, ...] = ()
+        self._network: NetworkInterface | None = None
+        self._idle: IdleTracker | None = None
+        self._stop_reason: str | None = None
         self._runner: web.AppRunner | None = None
         self._app: web.Application | None = None
         self._url: str | None = None
@@ -80,6 +92,7 @@ class DesktopRuntime:
         self._commands = asyncio.Lock()
         self._storage_lock = asyncio.Lock()
         self._initialized = self._loop.create_task(self._load_settings())
+        self._discovery = self._loop.create_task(self._discover_networks())
         self._refresh = self._loop.create_task(self._refresh_storage())
         self._tick = self._loop.create_task(self._publish_periodically())
         try:
@@ -185,8 +198,16 @@ class DesktopRuntime:
             "error": self._error
             or self._refresh_error
             or (observer and observer.error),
-            "network_name": None,
-            "network_is_public": False,
+            "network_name": self._network.name if self._network else None,
+            "network_is_public": self._network.profile == "public"
+            if self._network
+            else None,
+            "network_warning": self._network.warning if self._network else None,
+            "stop_reason": self._stop_reason,
+            "network_addresses": [
+                {"name": network.name, "address": network.address}
+                for network in self._networks
+            ],
         }
         with self._snapshot_lock:
             self._snapshot = snapshot
@@ -198,6 +219,13 @@ class DesktopRuntime:
                 self._rotate_offer()
             self._publish()
             await asyncio.sleep(0.15)
+
+    async def _discover_networks(self) -> None:
+        try:
+            self._networks = await asyncio.to_thread(list_network_interfaces)
+        except OSError:
+            self._networks = ()
+        self._publish()
 
     async def _refresh_storage(self) -> None:
         while True:
@@ -264,7 +292,9 @@ class DesktopRuntime:
     async def _start(self) -> None:
         if self._runner is not None:
             return
-        host = await asyncio.to_thread(select_bind_address, self._bind)
+        self._networks = await asyncio.to_thread(list_network_interfaces)
+        network = select_network(self._bind, candidates=self._networks)
+        host = network.address
         pairing = PairingManager(offer_ttl=self._offer_ttl)
         observer = TransferObserver(self._history)
         device_status = DeviceStatus(self._outbox.database.with_name("devices"))
@@ -279,6 +309,17 @@ class DesktopRuntime:
             device_status=device_status,
             on_device_seen=self._see_device,
         )
+
+        def stop(reason: StopReason) -> None:
+            self._loop.create_task(self._automatic_stop(app, reason))
+
+        tracker = install_lifecycle(
+            app,
+            host,
+            self._config.idle_timeout_seconds,
+            stop,
+            address_is_assigned=is_address_assigned,
+        )
         runner = web.AppRunner(
             app, access_log=None, handler_cancellation=True, shutdown_timeout=1
         )
@@ -289,12 +330,24 @@ class DesktopRuntime:
             await runner.cleanup()
             raise
         self._app, self._runner = app, runner
+        self._idle, self._network, self._stop_reason = tracker, network, None
         self._url = (
             f"http://{host}:{self._port}" if self._port != 80 else f"http://{host}"
         )
         self._pairing, self._observer = pairing, observer
         self._device_status = device_status
         self._rotate_offer()
+
+    async def _automatic_stop(self, app: web.Application, reason: StopReason) -> None:
+        async with self._commands:
+            if self._app is app:
+                await self._stop()
+                self._stop_reason = (
+                    "Stopped after inactivity"
+                    if reason == "idle"
+                    else "Network address changed. Start sharing to pair again."
+                )
+                self._publish()
 
     def stop(self) -> Future:
         return self._submit(self._stop)
@@ -307,6 +360,7 @@ class DesktopRuntime:
         finally:
             self._app = self._runner = self._pairing = self._pairing_offer = None
             self._url = None
+            self._idle = self._network = None
             self._observer = None
             self._device_status = None
             self._devices.clear()
@@ -324,7 +378,11 @@ class DesktopRuntime:
         return self._submit(self._offer, path)
 
     async def _offer(self, path: Path | str) -> None:
-        await asyncio.to_thread(self._outbox.offer, path)
+        if self._idle is None:
+            await asyncio.to_thread(self._outbox.offer, path)
+        else:
+            with self._idle.activity():
+                await asyncio.to_thread(self._outbox.offer, path)
         await self._read_storage()
 
     def remove_offer(self, offer_id: str) -> Future:
@@ -341,6 +399,8 @@ class DesktopRuntime:
         if self._app is None:
             raise ValueError("Start Duet before sending text")
         self._app[TEXT].send(text, source="pc")
+        if self._idle is not None:
+            self._idle.touch()
 
     def configure(
         self,
@@ -361,6 +421,8 @@ class DesktopRuntime:
         config, bind = self._settings(received_directory, idle_timeout_seconds, bind)
         await asyncio.to_thread(self._save_settings, config, bind)
         self._config, self._bind = config, bind
+        if self._idle is not None:
+            self._idle.set_timeout(config.idle_timeout_seconds)
 
     async def _shutdown(self) -> None:
         await asyncio.shield(self._initialized)
@@ -368,9 +430,12 @@ class DesktopRuntime:
             try:
                 await self._stop()
             finally:
+                self._discovery.cancel()
                 self._refresh.cancel()
                 self._tick.cancel()
-                await asyncio.gather(self._refresh, self._tick, return_exceptions=True)
+                await asyncio.gather(
+                    self._discovery, self._refresh, self._tick, return_exceptions=True
+                )
                 self._publish()
 
     def close(self) -> None:
