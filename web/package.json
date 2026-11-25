@@ -8,10 +8,17 @@
   "scripts": {
     "check": "tsc --noEmit",
     "dev": "vite",
-    "build": "npm run check && vite build"
+    "build": "npm run check && vite build",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "jsdom": "^26.1.0",
+    "prettier": "^3.6.2",
     "typescript": "5.9.3",
-    "vite": "8.3.8"
+    "vite": "8.3.8",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0"
   }
 }
