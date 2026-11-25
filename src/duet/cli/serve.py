@@ -9,6 +9,7 @@ from aiohttp import web
 
 from duet.core._network import select_bind_address
 from duet.core.config import Config, load_config
+from duet.core.device_status import DeviceStatus
 from duet.core.logging import configure_logging
 from duet.core.pairing import PairingManager, PairingOffer
 from duet.server.app import create_app
@@ -43,7 +44,12 @@ async def _listen(host: str, port: int, config: Config) -> None:
     refresh = asyncio.Event()
     base_url = f"http://{host}:{port}" if port != 80 else f"http://{host}"
     app = create_app(
-        pairing, host=host, port=port, on_paired=refresh.set, config=config
+        pairing,
+        host=host,
+        port=port,
+        on_paired=refresh.set,
+        config=config,
+        device_status=DeviceStatus(),
     )
     runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await runner.setup()

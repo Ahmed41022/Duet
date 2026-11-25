@@ -21,7 +21,24 @@ def main() -> None:
     )
     send = commands.add_parser("send", help="Offer a file or folder to paired phones")
     send.add_argument("file", type=Path)
+    commands.add_parser("devices", help="List paired devices on active local servers")
+    commands.add_parser("history", help="List recent PC transfer history")
     args = parser.parse_args()
+    if args.command == "devices":
+        from duet.core.device_status import list_devices
+
+        devices = list_devices()
+        for device in devices:
+            print(device["id"], device["address"])
+        if not devices:
+            print("No paired devices.")
+        return
+    if args.command == "history":
+        from duet.core.history import HistoryStore
+
+        for item in HistoryStore().list():
+            print(item["completed_at"], item["direction"], item["status"], item["name"])
+        return
     if args.command == "send":
         from duet.cli.send import run_send
 

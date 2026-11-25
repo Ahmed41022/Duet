@@ -12,6 +12,8 @@ from aiohttp import web
 
 from duet.core._network import is_private_ipv4
 from duet.core.config import Config
+from duet.core.device_status import DeviceStatus
+from duet.core.history import HistoryStore, TransferObserver
 from duet.core.outbox import Outbox
 from duet.core.pairing import PairingError, PairingManager, Session
 from duet.core.uploads import UploadStore
@@ -40,6 +42,9 @@ def create_app(
     outbox: Outbox | None = None,
     static_root: Traversable | None = None,
     heartbeat_interval: float = 15,
+    observer: TransferObserver | None = None,
+    device_status: DeviceStatus | None = None,
+    on_device_seen: Callable[[Session], None] | None = None,
     on_paired: Callable[[], None] | None = None,
 ) -> web.Application:
     """Create the application without opening a socket."""
@@ -75,6 +80,8 @@ def create_app(
             if session is None:
                 raise web.HTTPUnauthorized(text="Pairing required")
             request[SESSION] = session
+            if on_device_seen is not None:
+                on_device_seen(session)
         return await handler(request)
 
     app = web.Application(middlewares=[guard])
@@ -116,6 +123,12 @@ def create_app(
         response.set_cookie(
             _COOKIE, secret, httponly=True, samesite="Strict", path="/", secure=False
         )
+        if on_device_seen is not None:
+            session = pairing.authenticate(secret)
+            if session is not None:
+                on_device_seen(session)
+        if device_status is not None:
+            device_status.changed()
         if on_paired is not None:
             on_paired()
         return response
@@ -174,12 +187,14 @@ def create_app(
         application[EVENTS].close()
 
     config = config or Config()
+    observer = observer or TransferObserver(HistoryStore())
     uploads = UploadStore(
         config.received_directory,
         max_file_size=config.max_file_size,
         max_parallel_uploads=config.max_parallel_uploads,
+        observer=observer,
     )
-    register_outbox(app, events=app[EVENTS], outbox=outbox)
+    register_outbox(app, events=app[EVENTS], outbox=outbox, observer=observer)
     register_uploads(app, uploads, lambda request: session_for(request).id)
 
     async def session_status(request: web.Request) -> web.Response:
@@ -192,5 +207,25 @@ def create_app(
     app.router.add_get("/", static)
     app.router.add_get("/{asset:assets/.+}", static)
     app.on_response_prepare.append(protect_response)
+
+    async def flush_history(_: web.Application) -> None:
+        await observer.flush()
+
+    app.on_cleanup.append(flush_history)
+
+    if device_status is not None:
+
+        async def publish_devices(_: web.Application):
+            stop = asyncio.Event()
+            task = asyncio.create_task(device_status.run(pairing, stop))
+            try:
+                yield
+            finally:
+                stop.set()
+                device_status.changed()
+                await task
+
+        app.cleanup_ctx.append(publish_devices)
+
     app.on_shutdown.append(close_events)
     return app

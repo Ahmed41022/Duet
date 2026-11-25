@@ -16,7 +16,10 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from duet.core.history import TransferObserver
 
 DEFAULT_CHUNK_SIZE = 8 * 1024**2
 _CREATE_KEY = re.compile(r"[!-~]{1,128}")
@@ -240,6 +243,7 @@ class UploadStore:
         max_file_size: int | None = None,
         max_parallel_uploads: int = 3,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
+        observer: TransferObserver | None = None,
     ) -> None:
         if chunk_size <= 0 or max_parallel_uploads <= 0:
             raise ValueError(
@@ -248,6 +252,7 @@ class UploadStore:
         if max_file_size is not None and max_file_size < 0:
             raise ValueError("Maximum file size cannot be negative.")
         self.received_dir = Path(received_dir).absolute()
+        self._observer = observer
         self.max_file_size = max_file_size
         self.max_parallel_uploads = max_parallel_uploads
         self.chunk_size = chunk_size
@@ -351,6 +356,7 @@ class UploadStore:
                 asyncio.to_thread(self._find_duplicate, path, size, sha256)
             )
         self._uploads[upload.id] = upload
+        self._report_progress(upload)
         if key is not None:
             self._create_keys[key] = (manifest, upload)
         return upload
@@ -507,6 +513,13 @@ class UploadStore:
                 raise _storage_error(exc) from exc
             upload.received[index] = digest
             upload.written += len(data)
+            self._report_progress(upload)
+
+    def _report_progress(self, upload: _Upload) -> None:
+        if self._observer is not None:
+            self._observer.update(
+                upload.id, upload.path[-1], "upload", upload.written, upload.size
+            )
 
     @staticmethod
     def _write_chunk(upload: _Upload, index: int, data: bytearray) -> None:
@@ -558,6 +571,10 @@ class UploadStore:
             )
         except OSError as exc:
             raise _storage_error(exc) from exc
+        if self._observer is not None:
+            self._observer.finish(
+                upload.id, "completed", name=str(upload.result["name"])
+            )
         return upload.result
 
     def _publish(
@@ -635,13 +652,14 @@ class UploadStore:
             if not upload.canceled:
                 await _finish_io(self._discard(upload))
 
-    @staticmethod
-    async def _discard(upload: _Upload) -> None:
+    async def _discard(self, upload: _Upload) -> None:
         try:
             await asyncio.to_thread(upload.remove_stage)
         except OSError as exc:
             raise _storage_error(exc) from exc
         upload.canceled = True
+        if self._observer is not None:
+            self._observer.finish(upload.id, "cancelled")
         upload.received.clear()
 
     async def close(self) -> None:
