@@ -43,3 +43,7 @@ log_level = "INFO"
 ```
 
 The default received directory is `Duet/Received` under the user's home directory.
+
+## Pair a phone
+
+Build the web bundle as described above, then run `duet serve` in a terminal. Connect your phone to the same private network and scan the QR code. A new pairing offer appears after each use. Use `duet serve --bind 192.168.1.10` to select a specific private address assigned to your PC. Press Ctrl+C to stop the server.
