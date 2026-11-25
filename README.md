@@ -51,3 +51,7 @@ Build the web bundle as described above, then run `duet serve` in a terminal. Co
 ## Receive files
 
 Use `duet serve --config settings.toml` to select a Received folder or upload limits. Set `max_file_size` in bytes and `max_parallel_uploads` per paired device. The defaults allow any file size that fits on disk and three active uploads per device. Interrupted uploads can resume while the same server and pairing session are active.
+
+## Use the phone page
+
+Scan the QR code or open the displayed address and enter the six-digit PIN. Choose files or a folder to upload. If the browser reloads, tap **Resume** and select the original file. Use the language button to switch between English and Arabic. Paired devices and the desktop can exchange text while the server is running.
