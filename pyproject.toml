@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "duet"
+description = "Local file and text sharing between a phone and PC"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = ["build>=1.2", "pytest>=8", "ruff>=0.11"]
+
+[project.scripts]
+duet = "duet.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = { attr = "duet.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"duet.server" = ["static/*", "static/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
