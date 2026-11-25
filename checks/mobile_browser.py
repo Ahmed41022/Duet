@@ -11,6 +11,7 @@ from playwright.async_api import async_playwright, expect
 
 from duet.core._network import select_bind_address
 from duet.core.config import Config
+from duet.core.outbox import Outbox
 from duet.core.pairing import PairingManager
 from duet.server.app import create_app
 
@@ -26,6 +27,9 @@ async def main() -> None:
         pairing = PairingManager()
         offer = pairing.issue_offer()
         received = root / "received"
+        offered_file = root / "desktop.bin"
+        offered_file.write_bytes(b"Generated desktop download")
+        offer_id = Outbox().offer(offered_file).id
         app = create_app(
             pairing, host=host, port=port, config=Config(received_directory=received)
         )
@@ -64,6 +68,12 @@ async def main() -> None:
                         while not (received / "phone.bin").exists():
                             await asyncio.sleep(0.1)
                     assert (received / "phone.bin").read_bytes() == data
+                    async with page.expect_download() as pending:
+                        await page.locator(f'a[href="/api/files/{offer_id}"]').click()
+                    downloaded = await pending.value
+                    assert downloaded.suggested_filename == offered_file.name
+                    download_path = await downloaded.path()
+                    assert download_path.read_bytes() == offered_file.read_bytes()
                     await page.locator("textarea").fill("Hello from the phone")
                     await (
                         page.locator("form")
