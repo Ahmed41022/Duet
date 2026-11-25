@@ -1,0 +1,11 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  box-sizing: border-box;
+  margin-inline: auto;
+  max-inline-size: 38rem;
+  padding: clamp(1rem, 6vw, 3rem);
+}
