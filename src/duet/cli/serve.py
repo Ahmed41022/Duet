@@ -7,22 +7,23 @@ from pathlib import Path
 import qrcode
 from aiohttp import web
 
-from duet.core._network import select_bind_address
+from duet.core._network import NetworkInterface, select_network
 from duet.core.config import Config, load_config
 from duet.core.device_status import DeviceStatus
 from duet.core.logging import configure_logging
 from duet.core.pairing import PairingManager, PairingOffer
 from duet.server.app import create_app
+from duet.server.lifecycle import StopReason, install_lifecycle
 
 
 def run_serve(
     *, bind: str | None = None, port: int = 8765, config_path: Path | None = None
 ) -> int:
     try:
-        host = select_bind_address(bind)
+        network = select_network(bind)
         config = load_config(config_path)
         configure_logging(config)
-        asyncio.run(_listen(host, port, config))
+        asyncio.run(_listen(network, port, config))
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError) as exc:
@@ -39,7 +40,12 @@ def _print_offer(base_url: str, offer: PairingOffer) -> None:
     sys.stdout.flush()
 
 
-async def _listen(host: str, port: int, config: Config) -> None:
+async def _listen(network: NetworkInterface, port: int, config: Config) -> None:
+    host = network.address
+    print(f"Using {network.name} ({network.kind}) at {host}")
+    if network.warning:
+        print(network.warning)
+    print("Allow incoming connections on trusted private networks only.")
     pairing = PairingManager()
     refresh = asyncio.Event()
     base_url = f"http://{host}:{port}" if port != 80 else f"http://{host}"
@@ -51,17 +57,30 @@ async def _listen(host: str, port: int, config: Config) -> None:
         config=config,
         device_status=DeviceStatus(),
     )
+    stopped: StopReason | None = None
+
+    def stop(reason: StopReason) -> None:
+        nonlocal stopped
+        stopped = reason
+        refresh.set()
+
+    install_lifecycle(app, host, config.idle_timeout_seconds, stop)
     runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await runner.setup()
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
-        while True:
+        while stopped is None:
             refresh.clear()
             _print_offer(base_url, pairing.issue_offer())
             try:
                 await asyncio.wait_for(refresh.wait(), timeout=pairing.offer_ttl)
             except TimeoutError:
                 pass
+        print(
+            "Stopped after inactivity."
+            if stopped == "idle"
+            else "Network address changed. Restart sharing to pair again."
+        )
     finally:
         await runner.cleanup()

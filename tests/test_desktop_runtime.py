@@ -29,7 +29,9 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
 
     host = "192.168.123.45"
     site = web.TCPSite
-    monkeypatch.setattr(runtime_module, "select_bind_address", lambda _: host)
+    network = runtime_module.NetworkInterface("Wi-Fi", host, "wifi", "private")
+    monkeypatch.setattr(runtime_module, "list_network_interfaces", lambda: (network,))
+    monkeypatch.setattr(runtime_module, "is_address_assigned", lambda _: True)
     monkeypatch.setattr(
         runtime_module.web,
         "TCPSite",
@@ -175,3 +177,36 @@ def test_runtime_refreshes_external_storage_and_closes_queued_work(tmp_path):
         runtime.close()
     assert configuration.done()
     assert runtime.snapshot()["idle_timeout_seconds"] == 60
+
+
+@pytest.mark.parametrize("reason", ["idle", "address_changed"])
+def test_desktop_listener_stops_automatically(tmp_path, monkeypatch, reason):
+    network = runtime_module.NetworkInterface(
+        "Fixture Wi-Fi", "192.168.98.7", "wifi", "public"
+    )
+    monkeypatch.setattr(runtime_module, "list_network_interfaces", lambda: (network,))
+    monkeypatch.setattr(
+        runtime_module, "is_address_assigned", lambda _: reason == "idle"
+    )
+    real_site = web.TCPSite
+    monkeypatch.setattr(
+        runtime_module.web,
+        "TCPSite",
+        lambda runner, **kwargs: real_site(runner, "127.0.0.1", 0),
+    )
+    runtime = DesktopRuntime(data_directory=tmp_path)
+    try:
+        runtime.configure(tmp_path / "Received", 1 if reason == "idle" else 120).result(
+            5
+        )
+        runtime.start().result(5)
+        state = runtime.snapshot()
+        assert state["running"] and state["network_is_public"]
+        assert state["network_addresses"][0]["address"] == network.address
+        stopped = _wait_for(runtime, lambda snap: not snap["running"])
+        assert stopped["url"] is None and stopped["pin"] is None
+        assert ("inactivity" if reason == "idle" else "address changed") in stopped[
+            "stop_reason"
+        ]
+    finally:
+        runtime.close()

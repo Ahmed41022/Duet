@@ -61,3 +61,7 @@ Run `duet send "path/to/item"` on the PC. This adds the item to the local outbox
 Build the web bundle as described above, install the desktop extra with `python -m pip install -e ".[desktop]"`, then run `duet-desktop`. Click **Start sharing** to display the QR code and PIN. The Devices tab lets you revoke a phone. Use the Transfers and History tabs to see current and completed transfers, and the Text tab to read messages from a phone. You can also run `duet devices` and `duet history` in a terminal.
 
 Settings lets you choose the Received folder and idle timeout. Folder and bind-address changes apply the next time you start sharing. Close the window or use **Quit Duet** in its tray menu to stop sharing.
+
+## Use a PC hotspot
+
+The address selector prefers a reachable hotspot or Wi-Fi adapter. The server stops after inactivity or when its assigned address disappears. Follow the [Wi-Fi, hotspot and firewall guide](docs/network.md) for Windows and Linux setup and the physical-device test checklist.
