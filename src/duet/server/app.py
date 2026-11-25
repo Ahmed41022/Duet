@@ -12,9 +12,11 @@ from aiohttp import web
 
 from duet.core._network import is_private_ipv4
 from duet.core.config import Config
+from duet.core.outbox import Outbox
 from duet.core.pairing import PairingError, PairingManager, Session
 from duet.core.uploads import UploadStore
 from duet.server._events import EventHub
+from duet.server.outbox import register_outbox
 from duet.server.text import register_text
 from duet.server.uploads import register_uploads
 
@@ -35,6 +37,7 @@ def create_app(
     host: str,
     port: int,
     config: Config | None = None,
+    outbox: Outbox | None = None,
     static_root: Traversable | None = None,
     heartbeat_interval: float = 15,
     on_paired: Callable[[], None] | None = None,
@@ -176,6 +179,7 @@ def create_app(
         max_file_size=config.max_file_size,
         max_parallel_uploads=config.max_parallel_uploads,
     )
+    register_outbox(app, events=app[EVENTS], outbox=outbox)
     register_uploads(app, uploads, lambda request: session_for(request).id)
 
     async def session_status(request: web.Request) -> web.Response:

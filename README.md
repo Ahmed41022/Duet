@@ -55,3 +55,7 @@ Use `duet serve --config settings.toml` to select a Received folder or upload li
 ## Use the phone page
 
 Scan the QR code or open the displayed address and enter the six-digit PIN. Choose files or a folder to upload. If the browser reloads, tap **Resume** and select the original file. Use the language button to switch between English and Arabic. Paired devices and the desktop can exchange text while the server is running.
+
+## Send a file or folder to a phone
+
+Run `duet send "path/to/item"` on the PC. This adds the item to the local outbox. While the server is running, paired phones see the new offer automatically. The phone downloads a regular file directly or receives a folder as a ZIP. If the source changes, add it again to offer the new version.

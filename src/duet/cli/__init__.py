@@ -19,7 +19,13 @@ def main() -> None:
     serve.add_argument(
         "--config", type=Path, help="Path to the Duet TOML configuration"
     )
+    send = commands.add_parser("send", help="Offer a file or folder to paired phones")
+    send.add_argument("file", type=Path)
     args = parser.parse_args()
+    if args.command == "send":
+        from duet.cli.send import run_send
+
+        raise SystemExit(run_send(args.file))
     if args.command == "serve":
         from duet.cli.serve import run_serve
 
