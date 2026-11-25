@@ -55,3 +55,9 @@ Use `duet serve --config settings.toml` to select a Received folder or upload li
 ## Send a file or folder to a phone
 
 Run `duet send "path/to/item"` on the PC. This adds the item to the local outbox. While the server is running, paired phones see the new offer automatically. The phone downloads a regular file directly or receives a folder as a ZIP. If the source changes, add it again to offer the new version.
+
+## Launch the desktop app
+
+Build the web bundle as described above, install the desktop extra with `python -m pip install -e ".[desktop]"`, then run `duet-desktop`. Click **Start sharing** to display the QR code and PIN. The Devices tab lets you revoke a phone. Use the Transfers and History tabs to see current and completed transfers, and the Text tab to read messages from a phone. You can also run `duet devices` and `duet history` in a terminal.
+
+Settings lets you choose the Received folder and idle timeout. Folder and bind-address changes apply the next time you start sharing. Close the window or use **Quit Duet** in its tray menu to stop sharing.
