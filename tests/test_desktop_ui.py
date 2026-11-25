@@ -5,6 +5,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 pytest.importorskip("PySide6")
+from PySide6.QtCore import QCoreApplication, QEvent  # noqa: E402
+from PySide6.QtGui import QDesktopServices  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from duet.gui.window import MainWindow, SettingsDialog, _pairing_qr_payload  # noqa: E402
@@ -56,6 +58,12 @@ class FakeBackend:
     def offer(self, path):
         self.calls.append(("offer", path))
 
+    def remove_offer(self, offer_id):
+        self.calls.append(("remove_offer", offer_id))
+        self.data["outbox"] = [
+            offer for offer in self.data["outbox"] if offer["id"] != offer_id
+        ]
+
     def send_text(self, text):
         self.calls.append(("send_text", text))
 
@@ -70,8 +78,11 @@ class FakeBackend:
 
 @pytest.fixture(scope="module")
 def app():
-    instance = QApplication.instance() or QApplication([])
+    existing = QApplication.instance()
+    instance = existing or QApplication([])
     yield instance
+    if existing is None:
+        instance.shutdown()
 
 
 @pytest.fixture
@@ -80,6 +91,8 @@ def window(app):
     widget = MainWindow(backend, poll_interval_ms=60_000)
     yield widget, backend
     widget.close()
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_start_stop_qr_and_plain_address(window):
@@ -148,6 +161,9 @@ def test_snapshot_records_render_and_device_revocation(window):
     assert "hello" in widget.messages_list.item(0).text()
     widget._revoke("dev-1")
     assert ("revoke", "dev-1") in backend.calls
+    widget.outbox_table.cellWidget(0, 2).click()
+    assert ("remove_offer", "o1") in backend.calls
+    assert widget.outbox_table.rowCount() == 0
 
 
 def test_send_text_and_offers_delegate_to_backend(window):
@@ -178,3 +194,68 @@ def test_settings_apply_to_runtime(window, monkeypatch):
     monkeypatch.setattr(SettingsDialog, "exec", accept)
     widget.open_settings()
     assert ("configure", "C:/Duet/Incoming", 1200, "192.168.137.1") in backend.calls
+
+
+def test_open_received_creates_directory_on_click(window, tmp_path, monkeypatch):
+    widget, backend = window
+    folder = tmp_path / "new" / "Received"
+    backend.data["received_directory"] = str(folder)
+    opened = []
+
+    def open_url(url):
+        assert folder.is_dir()
+        opened.append(url.toLocalFile())
+        return True
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", open_url)
+    widget.refresh()
+    assert not folder.exists()
+    widget.open_received()
+    assert opened == [folder.as_posix()]
+
+
+def test_open_received_reports_failures(window, tmp_path, monkeypatch):
+    widget, backend = window
+    file = tmp_path / "file"
+    file.touch()
+    backend.data["received_directory"] = str(file)
+    monkeypatch.setattr(
+        QDesktopServices, "openUrl", lambda _: pytest.fail("Opened file")
+    )
+    widget.refresh()
+    widget.open_received()
+    assert "Could not create the Received folder" in widget.status_label.text()
+
+    backend.data["received_directory"] = str(tmp_path / "Received")
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda _: False)
+    widget.refresh()
+    widget.open_received()
+    assert "Could not open the Received folder" in widget.status_label.text()
+
+
+@pytest.mark.parametrize("action", ["close", "quit"])
+def test_desktop_process_exits_cleanly(action):
+    import subprocess
+    import sys
+
+    # A native teardown fault happens after pytest assertions, at process exit.
+    driver = """
+import sys
+from unittest.mock import patch
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from duet.gui.__main__ import MainWindow, main
+
+show = MainWindow.show
+workers = []
+def show_then_exit(window):
+    show(window)
+    workers.append(window.backend._thread)
+    close = window.close if sys.argv[1] == "close" else QApplication.instance().quit
+    QTimer.singleShot(0, close)
+
+with patch.object(MainWindow, "show", show_then_exit):
+    assert main() == 0
+assert len(workers) == 1 and not workers[0].is_alive()
+"""
+    subprocess.run([sys.executable, "-c", driver, action], check=True, timeout=30)
