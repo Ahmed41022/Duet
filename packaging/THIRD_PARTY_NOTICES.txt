@@ -1,0 +1,10 @@
+Duet desktop packages contain the following third-party components:
+
+PySide6 and Qt libraries are distributed under LGPL-3.0-only, GPL-2.0-only,
+GPL-3.0-only, or a commercial license, as described by the PySide6 distribution.
+Duet is an independent application and is not affiliated with The Qt Company.
+The LGPL v3 text is available at https://www.gnu.org/licenses/lgpl-3.0.html.
+Qt licensing information is available at https://www.qt.io/licensing/.
+
+The PyInstaller bootloader is covered by GPLv2 with an exception. Its license
+text is included as COPYING.txt. See https://pyinstaller.org/en/stable/license.html.
