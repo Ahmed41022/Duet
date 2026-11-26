@@ -1,4 +1,4 @@
-"""HTTP entry points for pairing, authenticated API requests, and the phone page."""
+"""Pairing, authenticated API requests, and the phone page over HTTP or HTTPS."""
 
 import asyncio
 import json
@@ -16,6 +16,7 @@ from duet.core.device_status import DeviceStatus
 from duet.core.history import HistoryStore, TransferObserver
 from duet.core.outbox import Outbox
 from duet.core.pairing import PairingError, PairingManager, Session
+from duet.core.tls import sharing_url
 from duet.core.uploads import UploadStore
 from duet.server._events import EventHub
 from duet.server.outbox import register_outbox
@@ -38,6 +39,7 @@ def create_app(
     *,
     host: str,
     port: int,
+    https: bool = False,
     config: Config | None = None,
     outbox: Outbox | None = None,
     static_root: Traversable | None = None,
@@ -52,9 +54,10 @@ def create_app(
         raise ValueError("The server requires a private IPv4 address and a valid port")
     if not 0 < heartbeat_interval < float("inf"):
         raise ValueError("The heartbeat interval must be finite and positive")
-    authority = f"{host}:{port}" if port != 80 else host
+    origin = sharing_url(host, port, https=https)
+    scheme, authority = origin.split("://", 1)
     allowed_hosts = {authority, f"{host}:{port}"}
-    allowed_origins = {f"http://{authority}", f"http://{host}:{port}"}
+    allowed_origins = {origin, f"{scheme}://{host}:{port}"}
     assets = (
         resources.files("duet.server").joinpath("static")
         if static_root is None
@@ -63,6 +66,8 @@ def create_app(
 
     @web.middleware
     async def guard(request: web.Request, handler: Callable) -> web.StreamResponse:
+        if https and not request.secure:
+            raise web.HTTPBadRequest(text="HTTPS required")
         hosts = request.headers.getall("Host", [])
         if len(hosts) != 1 or hosts[0] not in allowed_hosts:
             raise web.HTTPBadRequest(text="Invalid Host")
@@ -121,7 +126,7 @@ def create_app(
             raise web.HTTPUnauthorized(text=str(exc)) from None
         response = web.json_response({"paired": True})
         response.set_cookie(
-            _COOKIE, secret, httponly=True, samesite="Strict", path="/", secure=False
+            _COOKIE, secret, httponly=True, samesite="Strict", path="/", secure=https
         )
         if on_device_seen is not None:
             session = pairing.authenticate(secret)
@@ -163,7 +168,8 @@ def create_app(
         return response
 
     async def static(request: web.Request) -> web.Response:
-        path = request.match_info.get("asset", "index.html")
+        path = request.match_info.get("asset") or request.path.removeprefix("/")
+        path = path or "index.html"
         parts = path.split("/")
         if any(
             part in {"", ".", ".."} or "\\" in part or ":" in part for part in parts
@@ -172,7 +178,14 @@ def create_app(
         asset = assets.joinpath(*parts)
         if not asset.is_file():
             raise web.HTTPNotFound()
-        media_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        media_type = (
+            {
+                "manifest.webmanifest": "application/manifest+json",
+                "sw.js": "text/javascript",
+            }.get(path)
+            or mimetypes.guess_type(path)[0]
+            or "application/octet-stream"
+        )
         return web.Response(body=asset.read_bytes(), content_type=media_type)
 
     async def protect_response(
@@ -206,6 +219,8 @@ def create_app(
     app.router.add_get("/api/events", events, allow_head=False)
     app.router.add_get("/", static)
     app.router.add_get("/{asset:assets/.+}", static)
+    for name in ("manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png"):
+        app.router.add_get(f"/{name}", static)
     app.on_response_prepare.append(protect_response)
 
     async def flush_history(_: web.Application) -> None:

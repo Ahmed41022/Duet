@@ -15,6 +15,9 @@ def main() -> None:
     )
     serve.add_argument("--bind", help="Assigned private IPv4 address")
     serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument(
+        "--https", action="store_true", help="Enable HTTPS with Duet's local trust root"
+    )
 
     serve.add_argument(
         "--config", type=Path, help="Path to the Duet TOML configuration"
@@ -47,6 +50,11 @@ def main() -> None:
         from duet.cli.serve import run_serve
 
         raise SystemExit(
-            run_serve(bind=args.bind, port=args.port, config_path=args.config)
+            run_serve(
+                bind=args.bind,
+                port=args.port,
+                config_path=args.config,
+                https=args.https,
+            )
         )
     parser.print_help()

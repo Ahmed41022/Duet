@@ -9,5 +9,15 @@ export default defineConfig({
       new URL("../src/duet/server/static/", import.meta.url),
     ),
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        index: fileURLToPath(new URL("./index.html", import.meta.url)),
+        sw: fileURLToPath(new URL("./src/sw.ts", import.meta.url)),
+      },
+      output: {
+        entryFileNames: ({ name }) =>
+          name === "sw" ? "sw.js" : "assets/[name]-[hash].js",
+      },
+    },
   },
 });

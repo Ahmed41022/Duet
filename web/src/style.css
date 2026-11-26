@@ -353,6 +353,51 @@ input#pin {
   font-size: 13px;
   line-height: 1.5;
 }
+.message-actions,
+.share-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.message-actions {
+  justify-content: space-between;
+}
+.copy-text {
+  min-height: 36px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: #e2f2e9;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+}
+.copy-status:empty {
+  display: none;
+}
+.share-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 185px;
+  overflow-y: auto;
+}
+.share-files {
+  padding-inline-start: 20px;
+  overflow-wrap: anywhere;
+}
+.share-files small {
+  white-space: nowrap;
+}
+.share-notice {
+  margin: 0 0 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.share-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 .textform {
   display: flex;
   align-items: stretch;
