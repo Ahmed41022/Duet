@@ -1,6 +1,25 @@
 # Duet
 
-Duet is a local file and text sharing app for Windows and Linux. The phone uses its browser. See the [project plan](docs/PLAN.md) for the milestones.
+Duet shares files, folders and text between a Windows or Linux PC and a phone on the same private network. Open Duet on the PC, then pair from the phone’s browser with a QR code or PIN.
+
+## Screenshots
+
+In the desktop app, the History tab shows completed and interrupted transfers and lets you search by filename.
+
+![Duet desktop app with its pairing QR code and a filtered transfer history](docs/images/desktop.png)
+
+The phone page shows uploads, files offered from the PC, and shared text.
+
+<img src="docs/images/phone.png" width="393" alt="Paired phone browser showing two completed uploads, an offered file, and a message from the PC">
+
+## Install Duet
+
+- **Windows**. Download the installer artifact, unzip it and run the setup executable. Open Duet from the Start menu.
+- **Debian and Ubuntu**. Download and unzip the Linux artifact. Install the package with `sudo apt install ./<downloaded-file>.deb`, then open Duet from the application menu.
+
+Get the artifacts from a successful run of the packaging workflow. GitHub Actions requires sign-in to download workflow artifacts. See [Package Duet](https://github.com/Ahmed41022/Duet/actions/workflows/packages.yml).
+
+For a Python install, build the wheel using the steps below, then run `python -m pip install "./dist/<wheel-filename>.whl[desktop]"` with the actual wheel filename. The `desktop` extra adds Qt and the `duet-desktop` command launches the app.
 
 ## Development setup
 
@@ -62,10 +81,12 @@ Run `duet send "path/to/item"` on the PC. This adds the item to the local outbox
 
 ## Launch the desktop app
 
-Build the web bundle as described above, install the desktop extra with `python -m pip install -e ".[desktop]"`, then run `duet-desktop`. Click **Start sharing** to display the QR code and PIN. The Devices tab lets you revoke a phone. Use the Transfers and History tabs to see current and completed transfers, and the Text tab to read messages from a phone. You can also run `duet devices` and `duet history` in a terminal.
+For a source checkout, build the web bundle as described above, install the desktop extra with `python -m pip install -e ".[desktop]"`, then run `duet-desktop`. Click **Start sharing** to display the QR code and PIN. The Devices tab lets you revoke a phone. Use the Transfers tab to see active transfers and the Text tab to read messages from a phone. Search the History tab by all or part of a filename. It shows up to 100 of the most recent matches across saved transfers. Duet sends tray notifications when files arrive if the system tray supports notifications. You can also run `duet devices` and `duet history` in a terminal.
 
 Settings lets you choose the Received folder and idle timeout. Folder and bind-address changes apply the next time you start sharing. Close the window or use **Quit Duet** in its tray menu to stop sharing.
 
 ## Use a PC hotspot
 
 The address selector prefers a reachable hotspot or Wi-Fi adapter. The server stops after inactivity or when its assigned address disappears. Follow the [Wi-Fi, hotspot and firewall guide](docs/network.md) for Windows and Linux setup and the physical-device test checklist.
+
+See the [project plan](docs/PLAN.md) for the milestones.

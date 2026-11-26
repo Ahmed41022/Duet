@@ -7,7 +7,10 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QEvent  # noqa: E402
 from PySide6.QtGui import QDesktopServices  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import (
+    QApplication,  # noqa: E402
+    QSystemTrayIcon,  # noqa: E402
+)
 
 from duet.gui.window import MainWindow, SettingsDialog, _pairing_qr_payload  # noqa: E402
 
@@ -15,6 +18,7 @@ from duet.gui.window import MainWindow, SettingsDialog, _pairing_qr_payload  # n
 class FakeBackend:
     def __init__(self):
         self.calls = []
+        self.received = []
         self.data = {
             "running": False,
             "url": None,
@@ -66,6 +70,13 @@ class FakeBackend:
 
     def send_text(self, text):
         self.calls.append(("send_text", text))
+
+    def search_history(self, query):
+        self.calls.append(("search_history", query))
+
+    def take_received(self):
+        received, self.received = self.received, []
+        return received
 
     def configure(self, received_directory, idle_timeout_seconds, bind=None):
         self.calls.append(("configure", received_directory, idle_timeout_seconds, bind))
@@ -175,6 +186,45 @@ def test_send_text_and_offers_delegate_to_backend(window):
     assert ("send_text", "hello https://example.test") in backend.calls
     assert ("offer", "C:/generated/photo.bin") in backend.calls
     assert widget.message_edit.toPlainText() == ""
+
+
+def test_history_search_ignores_stale_results_and_renders_matches(window):
+    widget, backend = window
+    widget.history_search.setText("  notes  ")
+    widget._search_timer.timeout.emit()
+    assert ("search_history", "notes") in backend.calls
+    backend.data.update(history_query="old", history=[{"name": "old.txt"}])
+    widget.refresh()
+    assert widget.history_table.rowCount() == 0
+    assert widget.history_summary.text() == "Searching…"
+    backend.data.update(history_query="notes", history=[{"name": "notes.txt"}])
+    widget.refresh()
+    assert "notes.txt" in widget.history_table.item(0, 0).text()
+    widget.history_search.clear()
+    widget._search_timer.timeout.emit()
+    assert ("search_history", "") in backend.calls
+
+
+def test_tray_notifies_once_and_discards_events_when_unavailable(window, monkeypatch):
+    widget, backend = window
+    tray = QSystemTrayIcon(widget)
+    messages = []
+    monkeypatch.setattr(tray, "showMessage", lambda *args: messages.append(args))
+    monkeypatch.setattr(QSystemTrayIcon, "supportsMessages", lambda: True)
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", lambda: False)
+    widget.tray = tray
+    backend.received = ["missed.txt"]
+    widget._notify_received()
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", lambda: True)
+    backend.received = ["notes.txt"]
+    widget._notify_received()
+    widget._notify_received()
+    backend.received = ["photo.jpg", "slides.pdf"]
+    widget._notify_received()
+    assert messages == [
+        ("Duet · Received", "notes.txt"),
+        ("Duet · Received", "2 files received"),
+    ]
 
 
 def test_settings_apply_to_runtime(window, monkeypatch):
