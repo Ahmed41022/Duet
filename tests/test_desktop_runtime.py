@@ -226,6 +226,18 @@ def test_runtime_refreshes_external_storage_and_closes_queued_work(tmp_path):
 
 @pytest.mark.parametrize("reason", ["idle", "address_changed"])
 def test_desktop_listener_stops_automatically(tmp_path, monkeypatch, reason):
+    # Poll during the final storage refresh, before the stop command returns.
+    read_storage = DesktopRuntime._read_storage
+    first_stopped = []
+
+    async def poll_during_stop(runtime):
+        if runtime._runner is None and runtime._network is None and was_running:
+            runtime._publish()
+            first_stopped.append(runtime.snapshot())
+        await read_storage(runtime)
+
+    was_running = False
+    monkeypatch.setattr(DesktopRuntime, "_read_storage", poll_during_stop)
     network = runtime_module.NetworkInterface(
         "Fixture Wi-Fi", "192.168.98.7", "wifi", "public"
     )
@@ -247,9 +259,13 @@ def test_desktop_listener_stops_automatically(tmp_path, monkeypatch, reason):
         runtime.start().result(5)
         state = runtime.snapshot()
         assert state["running"] and state["network_is_public"]
+        was_running = True
         assert state["network_addresses"][0]["address"] == network.address
         stopped = _wait_for(runtime, lambda snap: not snap["running"])
         assert stopped["url"] is None and stopped["pin"] is None
+        assert (
+            first_stopped and first_stopped[0]["stop_reason"] == stopped["stop_reason"]
+        )
         assert ("inactivity" if reason == "idle" else "address changed") in stopped[
             "stop_reason"
         ]

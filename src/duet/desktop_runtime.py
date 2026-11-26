@@ -367,8 +367,7 @@ class DesktopRuntime:
     async def _automatic_stop(self, app: web.Application, reason: StopReason) -> None:
         async with self._commands:
             if self._app is app:
-                await self._stop()
-                self._stop_reason = (
+                await self._stop(
                     "Stopped after inactivity"
                     if reason == "idle"
                     else "Network address changed. Start sharing to pair again."
@@ -378,7 +377,7 @@ class DesktopRuntime:
     def stop(self) -> Future:
         return self._submit(self._stop)
 
-    async def _stop(self) -> None:
+    async def _stop(self, reason: str | None = None) -> None:
         if self._runner is None:
             return
         try:
@@ -386,6 +385,7 @@ class DesktopRuntime:
         finally:
             self._app = self._runner = self._pairing = self._pairing_offer = None
             self._url = None
+            self._stop_reason = reason
             self._idle = self._network = None
             self._observer = None
             self._device_status = None
