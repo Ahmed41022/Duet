@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -177,6 +178,7 @@ class MainWindow(QMainWindow):
         self._closed = False
         self._last_snapshot: dict[str, Any] = {}
         self._qr_target: str | None = None
+        self._shown_history: list[dict[str, Any]] | None = None
         self.setWindowTitle("Duet")
         self.setMinimumSize(960, 680)
         self.resize(1120, 780)
@@ -295,7 +297,26 @@ class MainWindow(QMainWindow):
         self.devices_table = self._make_table(["Device", "Connected", ""])
         self.transfers_table = self._make_table(["Transfer", "Progress", "State"])
         self.outbox_table = self._make_table(["Ready to send", "Size", "Action"])
-        self.history_table = self._make_table(["Recent activity", "Result", "When"])
+        history = QWidget()
+        history_layout = QVBoxLayout(history)
+        self.history_search = QLineEdit()
+        self.history_search.setPlaceholderText("Search transfer filenames")
+        self.history_search.setAccessibleName("Search transfer history")
+        self.history_search.setClearButtonEnabled(True)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self._search_history)
+        self.history_search.textChanged.connect(self._schedule_history_search)
+        history_layout.addWidget(self.history_search)
+        self.history_table = self._make_table(["Transfer", "Result", "When"])
+        self.history_table.horizontalHeader().setSectionResizeMode(
+            2, self.history_table.horizontalHeader().ResizeMode.ResizeToContents
+        )
+        self.history_table.horizontalHeader().setStretchLastSection(False)
+        history_layout.addWidget(self.history_table)
+        self.history_summary = _label("", "muted")
+        history_layout.addWidget(self.history_summary)
         self.messages_list = QListWidget()
         self.messages_list.setWordWrap(True)
         for title, widget in (
@@ -303,7 +324,7 @@ class MainWindow(QMainWindow):
             ("Transfers", self.transfers_table),
             ("Outbox", self.outbox_table),
             ("Text", self.messages_list),
-            ("History", self.history_table),
+            ("History", history),
         ):
             self.tabs.addTab(widget, title)
         right.addWidget(self.tabs, 1)
@@ -455,7 +476,8 @@ class MainWindow(QMainWindow):
         self._fill_transfers(snapshot.get("transfers") or [])
         self._fill_outbox(snapshot.get("outbox") or [])
         self._fill_messages(snapshot.get("messages") or [])
-        self._fill_history(snapshot.get("history") or [])
+        self._refresh_history(snapshot)
+        self._notify_received()
         if not running and snapshot.get("stop_reason"):
             self.status_label.setText(snapshot["stop_reason"])
         error = snapshot.get("error")
@@ -580,23 +602,65 @@ class MainWindow(QMainWindow):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.messages_list.addItem(item)
 
+    def _schedule_history_search(self, _text: str) -> None:
+        self._search_timer.start()
+        self._refresh_history(self._last_snapshot)
+
+    def _search_history(self) -> None:
+        self._call("search_history", self.history_search.text().strip())
+
+    def _refresh_history(self, snapshot: dict[str, Any]) -> None:
+        query = self.history_search.text().strip()
+        if snapshot.get("history_query", "") != query:
+            self.history_summary.setText("Searching…")
+            rows = []
+        else:
+            rows = snapshot.get("history") or []
+            if rows:
+                message = f"Showing {len(rows)} most recent transfers"
+                if query:
+                    message = f"Showing {len(rows)} most recent matches"
+            else:
+                message = "No matching transfers" if query else "No transfers yet"
+            self.history_summary.setText(message)
+        if rows != self._shown_history:
+            self._fill_history(rows)
+            self._shown_history = rows
+
+    def _notify_received(self) -> None:
+        names = self.backend.take_received()
+        if (
+            not names
+            or self.tray is None
+            or not QSystemTrayIcon.isSystemTrayAvailable()
+            or not QSystemTrayIcon.supportsMessages()
+        ):
+            return
+        message = names[0] if len(names) == 1 else f"{len(names)} files received"
+        self.tray.showMessage("Duet · Received", message)
+
     def _fill_history(self, rows: list[dict[str, Any]]) -> None:
         self.history_table.setRowCount(len(rows))
         for row, item in enumerate(rows):
             direction = (
                 "Phone → PC" if item.get("direction") == "upload" else "PC → phone"
             )
+            transfer = f"{item.get('name') or 'Transfer'} · {direction}"
+            transfer_item = QTableWidgetItem(transfer)
+            transfer_item.setToolTip(transfer)
+            self.history_table.setItem(row, 0, transfer_item)
             self.history_table.setItem(
                 row,
-                0,
-                QTableWidgetItem(f"{item.get('name') or 'Transfer'} · {direction}"),
+                1,
+                QTableWidgetItem(str(item.get("status") or "Completed").capitalize()),
             )
-            self.history_table.setItem(
-                row, 1, QTableWidgetItem(str(item.get("status") or "Complete"))
-            )
-            self.history_table.setItem(
-                row, 2, QTableWidgetItem(str(item.get("completed_at") or ""))
-            )
+            timestamp = str(item.get("completed_at") or "")
+            try:
+                local_time = datetime.fromisoformat(timestamp).astimezone()
+                timestamp = local_time.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                pass
+            self.history_table.setItem(row, 2, QTableWidgetItem(timestamp))
 
     def pick_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose files to send")
