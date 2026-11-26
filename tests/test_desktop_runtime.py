@@ -127,6 +127,8 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
         next_offer = _wait_for(runtime, lambda s: s["token"] != state["token"])
         assert next_offer["token"]
         runtime.stop().result(5)
+        assert runtime.take_received() == ["received.bin"]
+        assert runtime.take_received() == []
         assert runtime.snapshot()["token"] is None
         assert runtime.snapshot()["running"] is False
     finally:
@@ -143,6 +145,7 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
             "upload": 3,
             "download": 4,
         }
+        assert reopened.take_received() == []
     finally:
         reopened.close()
 
@@ -150,7 +153,8 @@ def test_runtime_control_and_http_activity(tmp_path, monkeypatch):
 def test_history_tracks_completed_and_cancelled_transfers(tmp_path):
     async def exercise():
         history = HistoryStore(tmp_path / "history.sqlite3")
-        observer = TransferObserver(history)
+        notices = []
+        observer = TransferObserver(history, on_receive=notices.append)
         assert not history.database.exists()
         observer.update("one", "file", "upload", 2, 8)
         assert observer.active()[0]["progress"] == 0.25
@@ -163,8 +167,42 @@ def test_history_tracks_completed_and_cancelled_transfers(tmp_path):
             "two": "cancelled",
         }
         assert observer.active() == []
+        observer.update("one", "file", "upload", 8, 8)
+        observer.finish("one", "completed")
+        observer.update("three", "third", "upload", 1, 2)
+        await observer.flush()
+        assert notices == ["file"]
 
     asyncio.run(exercise())
+
+
+def test_history_search_reads_past_latest_page_and_live_updates(tmp_path):
+    history = HistoryStore(tmp_path / "history.sqlite3")
+    entry = dict(direction="upload", status="completed", size=42)
+    history.record(
+        dict(entry, id="old", name="Straße_100%.txt", completed_at="2020-01-01")
+    )
+    for index in range(101):
+        history.record(
+            dict(entry, id=f"{index}", name="unrelated", completed_at="2021-01-01")
+        )
+    assert len(history.list()) == 100
+    assert all(row["id"] != "old" for row in history.list())
+
+    runtime = DesktopRuntime(data_directory=tmp_path)
+    try:
+        runtime.search_history("  STRASSE_100%.TXT  ").result(5)
+        assert [row["id"] for row in runtime.snapshot()["history"]] == ["old"]
+        history.record(
+            dict(entry, id="new", name="Straße_100%.txt", completed_at="2022-01-01")
+        )
+        state = _wait_for(runtime, lambda s: len(s["history"]) == 2)
+        assert [row["id"] for row in state["history"]] == ["new", "old"]
+        assert runtime.take_received() == []
+        runtime.search_history("").result(5)
+        assert len(runtime.snapshot()["history"]) == 100
+    finally:
+        runtime.close()
 
 
 def test_runtime_refreshes_external_storage_and_closes_queued_work(tmp_path):

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,21 +39,27 @@ class HistoryStore:
             raise
         return connection
 
-    def record(self, entry: dict) -> None:
+    def record(self, entry: dict) -> bool:
         with closing(self._connect()) as connection, connection:
-            connection.execute(
+            cursor = connection.execute(
                 "INSERT INTO transfers VALUES "
                 "(:id, :name, :direction, :status, :completed_at, :size) "
                 "ON CONFLICT(id) DO NOTHING",
                 entry,
             )
+            return cursor.rowcount == 1
 
-    def list(self, limit: int = 100) -> list[dict]:
+    def list(self, limit: int = 100, *, query: str = "") -> list[dict]:
         with closing(self._connect()) as connection:
             connection.row_factory = sqlite3.Row
+            statement = "SELECT * FROM transfers"
+            parameters: tuple = (limit,)
+            if query := query.strip().casefold():
+                connection.create_function("casefold", 1, str.casefold)
+                statement += " WHERE instr(casefold(name), ?) > 0"
+                parameters = (query, limit)
             records = connection.execute(
-                "SELECT * FROM transfers ORDER BY completed_at DESC, id DESC LIMIT ?",
-                (limit,),
+                statement + " ORDER BY completed_at DESC, id DESC LIMIT ?", parameters
             )
             return [dict(row) for row in records]
 
@@ -60,8 +67,14 @@ class HistoryStore:
 class TransferObserver:
     """Track active transfers and hand completed metadata to the local database."""
 
-    def __init__(self, history: HistoryStore) -> None:
+    def __init__(
+        self,
+        history: HistoryStore,
+        *,
+        on_receive: Callable[[str], None] | None = None,
+    ) -> None:
         self.history = history
+        self._on_receive = on_receive
         self._active: dict[str, tuple[float, dict]] = {}
         self._pending: set[asyncio.Task] = set()
         self.last_activity = time.monotonic()
@@ -108,10 +121,18 @@ class TransferObserver:
 
     async def _record(self, entry: dict) -> None:
         try:
-            await asyncio.to_thread(self.history.record, entry)
+            inserted = await asyncio.to_thread(self.history.record, entry)
         except (sqlite3.Error, OSError) as exc:
             self.error = "Could not save transfer history"
             _LOG.warning("%s: %s", self.error, exc)
+        else:
+            if (
+                inserted
+                and self._on_receive is not None
+                and entry["direction"] == "upload"
+                and entry["status"] == "completed"
+            ):
+                self._on_receive(entry["name"])
 
     def active(self) -> list[dict]:
         return [dict(transfer) for _, transfer in self._active.values()]

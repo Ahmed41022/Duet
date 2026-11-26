@@ -74,11 +74,15 @@ class DesktopRuntime:
         self._devices: dict[str, dict] = {}
         self._outbox_rows: list[dict] = []
         self._history_rows: list[dict] = []
+        self._history_query = ""
+        self._displayed_history_query = ""
         self._error: str | None = None
         self._refresh_error: str | None = None
         self._closed = False
         self._submission_lock = threading.Lock()
         self._snapshot_lock = threading.Lock()
+        self._received_lock = threading.Lock()
+        self._received: list[str] = []
         self._snapshot: dict = {}
         self._publish()
         self._loop = asyncio.new_event_loop()
@@ -180,6 +184,7 @@ class DesktopRuntime:
             "devices": [dict(device) for device in self._devices.values()],
             "transfers": observer.active() if observer else [],
             "history": self._history_rows,
+            "history_query": self._displayed_history_query,
             "outbox": self._outbox_rows,
             "messages": [
                 {
@@ -235,19 +240,40 @@ class DesktopRuntime:
 
     async def _read_storage(self) -> None:
         async with self._storage_lock:
+            query = self._history_query
             try:
-                offers, history = await asyncio.to_thread(self._storage_rows)
+                offers, history = await asyncio.to_thread(self._storage_rows, query)
             except (OSError, sqlite3.Error):
                 self._refresh_error = "Could not read the outbox or transfer history"
             else:
                 self._outbox_rows = offers
                 self._history_rows = history
+                self._displayed_history_query = query
                 self._refresh_error = None
 
-    def _storage_rows(self) -> tuple[list[dict], list[dict]]:
+    def _storage_rows(self, query: str) -> tuple[list[dict], list[dict]]:
         offers = self._outbox.list() if self._outbox.database.exists() else []
-        history = self._history.list() if self._history.database.exists() else []
+        history = (
+            self._history.list(query=query) if self._history.database.exists() else []
+        )
         return [offer.public() for offer in offers], history
+
+    def search_history(self, query: str) -> Future:
+        return self._submit(self._search_history, query)
+
+    async def _search_history(self, query: str) -> None:
+        self._history_query = query
+        await self._read_storage()
+
+    def _received_file(self, name: str) -> None:
+        with self._received_lock:
+            self._received.append(name)
+
+    def take_received(self) -> list[str]:
+        """Drain completed receives recorded by this runtime since the last poll."""
+        with self._received_lock:
+            received, self._received = self._received, []
+        return received
 
     def _see_device(self, session: Session) -> None:
         now = datetime.now(UTC).isoformat()
@@ -296,7 +322,7 @@ class DesktopRuntime:
         network = select_network(self._bind, candidates=self._networks)
         host = network.address
         pairing = PairingManager(offer_ttl=self._offer_ttl)
-        observer = TransferObserver(self._history)
+        observer = TransferObserver(self._history, on_receive=self._received_file)
         device_status = DeviceStatus(self._outbox.database.with_name("devices"))
         app = create_app(
             pairing,
