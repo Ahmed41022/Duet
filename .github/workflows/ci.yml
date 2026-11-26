@@ -83,3 +83,4 @@ jobs:
       - run: python -m pip install -e . playwright
       - run: python -m playwright install --with-deps chromium
       - run: python checks/mobile_browser.py
+      - run: python checks/https_browser.py
