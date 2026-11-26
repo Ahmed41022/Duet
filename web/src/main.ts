@@ -1,5 +1,11 @@
 import "./style.css";
 import {
+  clearDraftText,
+  deleteDraft,
+  listDrafts,
+  type ShareDraft,
+} from "./share";
+import {
   HttpError,
   loadQueue,
   runUpload,
@@ -42,6 +48,19 @@ const translations = {
     done: "Transfer complete",
     folderLabel: "Folder",
     failed: "Transfer failed. Choose Resume to try again.",
+    shareDraft: "Shared with Duet",
+    sharePair: "Connect to your PC to send this share.",
+    shareSend: "Send to PC",
+    shareDiscard: "Discard draft",
+    shareReceived: "Share added to the transfer queue.",
+    shareSent: "Shared text sent.",
+    shareError:
+      "Could not save the share. The draft inbox may be full or the share too large. Try sharing a smaller selection.",
+    shareActionError: "Could not finish. Check your connection and try again.",
+    shareUnavailable: "This browser could not open the local share inbox.",
+    copyText: "Copy",
+    copied: "Copied to clipboard.",
+    copyFailed: "Could not copy. Select the message to copy it manually.",
   },
   ar: {
     title: "Duet",
@@ -76,6 +95,19 @@ const translations = {
     done: "اكتمل النقل",
     folderLabel: "مجلد",
     failed: "فشل النقل. اختر استئناف للمحاولة مجددًا.",
+    shareDraft: "مشاركة مع Duet",
+    sharePair: "اتصل بالكمبيوتر لإرسال هذه المشاركة.",
+    shareSend: "إرسال إلى الكمبيوتر",
+    shareDiscard: "حذف المسودة",
+    shareReceived: "أُضيفت الملفات إلى قائمة النقل.",
+    shareSent: "أُرسل النص المشترك.",
+    shareError:
+      "تعذر حفظ المشاركة. قد يكون صندوق المسودات ممتلئًا أو حجم المشاركة كبيرًا. حاول مشاركة عناصر أقل.",
+    shareActionError: "تعذر إتمام العملية. تحقق من الاتصال وحاول مجددًا.",
+    shareUnavailable: "تعذر على هذا المتصفح فتح صندوق المشاركات على الهاتف.",
+    copyText: "نسخ",
+    copied: "تم النسخ إلى الحافظة.",
+    copyFailed: "تعذر النسخ. حدّد الرسالة لنسخها يدويًا.",
   },
 } as const;
 type Copy = (typeof translations)[Language];
@@ -102,6 +134,24 @@ const liveFiles = new Map<string, File>(),
   controllers = new Map<string, AbortController>();
 const retryOnReconnect = new Set<string>();
 const root = document.querySelector<HTMLDivElement>("#app")!;
+const secure = window.isSecureContext && location.protocol === "https:";
+let drafts: ShareDraft[] = [];
+let expiryTimer: number | undefined;
+const busyDrafts = new Set<string>();
+let shareNotice:
+  | "shareReceived"
+  | "shareSent"
+  | "shareError"
+  | "shareActionError"
+  | "shareUnavailable"
+  | undefined;
+let copyNotice: "copied" | "copyFailed" | undefined;
+if (secure && new URLSearchParams(location.search).get("share") === "failed") {
+  shareNotice = "shareError";
+  const url = new URL(location.href);
+  url.searchParams.delete("share");
+  history.replaceState(null, "", url);
+}
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -156,6 +206,25 @@ function updateTransfer(item: UploadRecord): void {
     label.textContent = `${formatSize(item.size)} · ${detail}`;
   }
 }
+
+function renderDrafts(): string {
+  return `${shareNotice ? `<p class="share-notice" role="status">${copy[shareNotice]}</p>` : ""}${drafts
+    .map(({ id, text, files }) => {
+      const busy = busyDrafts.has(id);
+      return `<section class="card share-card" data-draft="${escapeHtml(id)}">
+      <h2>${copy.shareDraft}</h2>
+      ${text ? `<p class="share-preview" dir="auto">${escapeHtml(text)}</p>` : ""}
+      ${files.length ? `<ul class="share-files">${files.map((file) => `<li><bdi>${escapeHtml(file.name)}</bdi> <small>${formatSize(file.size)}</small></li>`).join("")}</ul>` : ""}
+      ${paired ? "" : `<p class="muted">${copy.sharePair}</p>`}
+      <div class="share-actions">
+        <button type="button" class="primary" data-draft-action="send" ${paired && online && !busy ? "" : "disabled"}>${copy.shareSend}</button>
+        <button type="button" class="secondary" data-draft-action="discard" ${busy ? "disabled" : ""}>${copy.shareDiscard}</button>
+      </div>
+    </section>`;
+    })
+    .join("")}`;
+}
+
 function render(): void {
   document.documentElement.lang = language;
   document.documentElement.dir = language === "ar" ? "rtl" : "ltr";
@@ -164,6 +233,7 @@ function render(): void {
   const draft =
     root.querySelector<HTMLTextAreaElement>('textarea[name="text"]')?.value ??
     "";
+  const pinValue = root.querySelector<HTMLInputElement>("#pin")?.value ?? "";
   const active =
     document.activeElement instanceof HTMLElement
       ? document.activeElement.id
@@ -175,15 +245,19 @@ function render(): void {
           document.activeElement.selectionEnd,
         ] as const)
       : undefined;
-  root.innerHTML = `<header><div class="brand"><span class="mark" aria-hidden="true">↔</span><div><h1>${copy.title}</h1></div></div><button class="lang" id="lang" type="button">${language === "en" ? "العربية" : "English"}</button></header><main>${
+  root.innerHTML = `<header><div class="brand"><span class="mark" aria-hidden="true">↔</span><div><h1>${copy.title}</h1></div></div><button class="lang" id="lang" type="button">${language === "en" ? "العربية" : "English"}</button></header><main>${renderDrafts()}${
     !paired
       ? `<section class="card pairing"><div class="eyebrow">${copy.pair}</div><p class="muted">${copy.instruction}</p><form id="pairForm"><label for="pin">${copy.pin}</label><div class="join"><input id="pin" name="pin" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required><button class="primary" type="submit">${copy.connect}</button></div><div id="pairError" class="error" role="alert"></div></form></section>`
       : `<div class="status ${online ? "" : "offline"}" role="status"><i></i>${online ? copy.online : copy.offline}<span>${copy.paired}</span></div>
 <section class="card"><div class="section-head"><div><div class="eyebrow">${copy.files}</div><h2>${copy.queue}</h2></div></div><div class="picker"><label class="pick primary">＋ ${copy.pick}<input id="files" type="file" multiple></label><label class="pick secondary">▧ ${copy.folder}<input id="folder" type="file" webkitdirectory directory multiple></label></div><div class="queue">${queue.length ? queue.map((item) => `<article class="transfer" data-key="${escapeHtml(item.key)}"><div class="fileicon" aria-hidden="true">${/\.(jpg|png|heic|webp)$/i.test(item.name) ? "▧" : "↥"}</div><div class="fileinfo"><strong>${escapeHtml(item.name)}</strong><small>${formatSize(item.size)} · ${item.status === "done" ? copy.done : item.status === "uploading" ? `${(item.bytesHashed ?? 0) < item.size ? copy.hashing : copy.sent} ${formatSize((item.bytesHashed ?? 0) < item.size ? (item.bytesHashed ?? 0) : (item.bytesDone ?? 0))} / ${formatSize(item.size)}` : item.status === "error" ? escapeHtml(item.error || copy.failed) : copy.waiting}</small><progress max="100" value="${transferPercent(item)}" aria-label="${escapeHtml(item.name)} ${transferPercent(item)}%"></progress></div>${item.status !== "done" && (item.status === "error" || !liveFiles.has(item.key)) ? `<button class="action resume" data-key="${escapeHtml(item.key)}" type="button">${item.cancelPending ? copy.retryCleanup : copy.resume}</button>` : ""}<button class="iconbtn remove" data-key="${escapeHtml(item.key)}" type="button" aria-label="${copy.remove}">×</button></article>`).join("") : `<p class="empty">${copy.empty}</p>`}</div></section>
-<section class="card"><div class="eyebrow">${copy.received}</div><div id="outbox" class="list"><p class="empty">${copy.empty}</p></div></section><section class="card"><div class="eyebrow">${copy.text}</div><div id="messages" class="messages"><p class="empty">${copy.empty}</p></div><form id="textForm" class="textform"><textarea id="share-text" name="text" rows="2" maxlength="10000" placeholder="${copy.write}" required></textarea><button class="primary" type="submit">${copy.send}</button></form></section>`
+<section class="card"><div class="eyebrow">${copy.received}</div><div id="outbox" class="list"><p class="empty">${copy.empty}</p></div></section><section class="card"><div class="eyebrow">${copy.text}</div><div id="messages" class="messages"><p class="empty">${copy.empty}</p></div><p id="copy-status" class="muted copy-status" role="status">${copyNotice ? copy[copyNotice] : ""}</p><form id="textForm" class="textform"><textarea id="share-text" name="text" rows="2" maxlength="10000" placeholder="${copy.write}" required></textarea><button class="primary" type="submit">${copy.send}</button></form></section>`
   }</main>`;
-  if (oldMessages && root.querySelector("#messages"))
+  if (oldMessages && root.querySelector("#messages")) {
     root.querySelector("#messages")!.innerHTML = oldMessages;
+    root.querySelectorAll(".copy-text").forEach((button) => {
+      button.textContent = copy.copyText;
+    });
+  }
   if (oldOutbox && root.querySelector("#outbox"))
     root.querySelector("#outbox")!.innerHTML = oldOutbox;
   const textarea = root.querySelector<HTMLTextAreaElement>(
@@ -193,6 +267,11 @@ function render(): void {
   if (textarea && active === "share-text") {
     textarea.focus();
     if (textSelection) textarea.setSelectionRange(...textSelection);
+  }
+  const pin = root.querySelector<HTMLInputElement>("#pin");
+  if (pin) {
+    pin.value = pinValue;
+    if (active === "pin") pin.focus();
   }
   root.querySelector("#lang")?.addEventListener("click", () => {
     language = language === "en" ? "ar" : "en";
@@ -228,6 +307,85 @@ function render(): void {
     .querySelector<HTMLFormElement>("#textForm")
     ?.addEventListener("submit", (e) => void sendText(e));
 }
+
+async function refreshDrafts(): Promise<void> {
+  try {
+    const pending = await listDrafts();
+    const changed =
+      JSON.stringify(pending.map(({ id, text }) => [id, text])) !==
+      JSON.stringify(drafts.map(({ id, text }) => [id, text]));
+    drafts = pending;
+    window.clearTimeout(expiryTimer);
+    if (drafts.length) {
+      const deadline = Math.min(...drafts.map((draft) => draft.expiresAt));
+      expiryTimer = window.setTimeout(
+        () => void refreshDrafts(),
+        Math.max(0, deadline - Date.now()),
+      );
+    }
+    if (changed) render();
+  } catch {
+    drafts = [];
+    shareNotice = "shareUnavailable";
+    render();
+  }
+}
+
+async function updateDraft(id: string, send: boolean): Promise<void> {
+  if (busyDrafts.has(id) || (send && (!paired || !online))) return;
+  busyDrafts.add(id);
+  shareNotice = undefined;
+  render();
+  try {
+    await navigator.locks.request("duet.share", async () => {
+      const draft = (await listDrafts()).find((item) => item.id === id);
+      if (!draft) return;
+      if (send) {
+        if (!paired || !online) throw new Error("Pairing required");
+        if (draft.text) {
+          await postText(draft.text);
+          await clearDraftText(id);
+          void refreshText();
+        }
+        if (draft.files.length) {
+          enqueueFiles(draft.files, false, id);
+          shareNotice = "shareReceived";
+        } else shareNotice = "shareSent";
+      }
+      await deleteDraft(id);
+    });
+  } catch (error) {
+    shareNotice = "shareActionError";
+    if (error instanceof HttpError && error.status === 401)
+      await checkSession();
+  } finally {
+    busyDrafts.delete(id);
+    await refreshDrafts();
+    render();
+    void pump();
+  }
+}
+
+async function copyMessage(button: HTMLButtonElement): Promise<void> {
+  const text = button.closest(".message")?.querySelector("p")?.textContent;
+  if (!secure || text == null) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    copyNotice = "copied";
+  } catch {
+    copyNotice = "copyFailed";
+  }
+  const status = root.querySelector("#copy-status");
+  if (status) status.textContent = copy[copyNotice];
+}
+
+root.addEventListener("click", (event) => {
+  if (!(event.target instanceof HTMLButtonElement)) return;
+  if (event.target.matches(".copy-text")) void copyMessage(event.target);
+  const action = event.target.dataset.draftAction;
+  const id = event.target.closest<HTMLElement>("[data-draft]")?.dataset.draft;
+  if (id && action) void updateDraft(id, action === "send");
+});
 function persist(): void {
   saveQueue(queue);
 }
@@ -267,12 +425,24 @@ function makeKey(): string {
 }
 function addFiles(files: FileList | null, folder = false): void {
   if (!files) return;
-  for (const file of Array.from(files)) {
+  enqueueFiles(Array.from(files), folder);
+  render();
+  void pump();
+}
+function enqueueFiles(files: File[], folder: boolean, draftId?: string): void {
+  const updated = [...queue];
+  const available = new Map<string, File>();
+  for (const [index, file] of files.entries()) {
     const relpath = (file as File & { webkitRelativePath?: string })
       .webkitRelativePath;
-    const key = makeKey();
-    liveFiles.set(key, file);
-    queue.push({
+    const key = draftId ? `${draftId}-${index}` : makeKey();
+    const saved = updated.find((item) => item.key === key);
+    if (saved) {
+      if (saved.status !== "done") available.set(key, file);
+      continue;
+    }
+    available.set(key, file);
+    updated.push({
       key,
       name: file.name,
       size: file.size,
@@ -281,9 +451,9 @@ function addFiles(files: FileList | null, folder = false): void {
       bytesDone: 0,
     });
   }
-  persist();
-  render();
-  void pump();
+  saveQueue(updated);
+  queue = updated;
+  for (const [key, file] of available) liveFiles.set(key, file);
 }
 async function reselect(record: UploadRecord): Promise<File | null> {
   return new Promise((resolve) => {
@@ -461,21 +631,24 @@ async function sendText(event: SubmitEvent): Promise<void> {
   const text = textarea.value.trim();
   if (!text) return;
   try {
-    const response = await fetch("/api/text", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (response.status === 401) {
+    await postText(text);
+    textarea.value = "";
+    await refreshText();
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 401) {
       await checkSession();
       return;
     }
-    if (!response.ok) throw new Error(copy.connection);
-    textarea.value = "";
-    await refreshText();
-  } catch {
     alert(copy.connection);
   }
+}
+async function postText(text: string): Promise<void> {
+  const response = await fetch("/api/text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) throw new HttpError(response.status, copy.connection);
 }
 async function refreshText(): Promise<void> {
   try {
@@ -499,7 +672,7 @@ async function refreshText(): Promise<void> {
         ? data.messages
             .map(
               (m) =>
-                `<article class="message"><p>${escapeHtml(m.text)}</p><small>${escapeHtml(m.source)} · ${new Date(m.created_at).toLocaleTimeString(language)}</small></article>`,
+                `<article class="message"><p dir="auto">${escapeHtml(m.text)}</p><div class="message-actions"><small>${escapeHtml(m.source)} · ${new Date(m.created_at).toLocaleTimeString(language)}</small>${secure ? `<button type="button" class="copy-text">${copy.copyText}</button>` : ""}</div></article>`,
             )
             .join("")
         : `<p class="empty">${copy.empty}</p>`;
@@ -601,6 +774,28 @@ window.addEventListener("offline", () => {
   }
   render();
 });
+if (
+  secure &&
+  "serviceWorker" in navigator &&
+  "locks" in navigator &&
+  "indexedDB" in window
+) {
+  const manifest = document.createElement("link");
+  manifest.rel = "manifest";
+  manifest.href = "/manifest.webmanifest";
+  document.head.append(manifest);
+  void navigator.serviceWorker
+    .register("/sw.js", { type: "module" })
+    .catch(() => {
+      shareNotice = "shareUnavailable";
+      render();
+    });
+  void refreshDrafts();
+  window.addEventListener("focus", () => void refreshDrafts());
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) void refreshDrafts();
+  });
+}
 render();
 if (qrToken) {
   const token = qrToken;
